@@ -18,9 +18,7 @@ repositories {
 }
 
 dependencies {
-	implementation 'org.springframework.boot:spring-boot-starter'
-	testImplementation 'org.springframework.boot:spring-boot-starter-test'
-	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testImplementation("org.junit.jupiter:junit-jupiter:5.9.2")
 }
 
 tasks.named('test') {
