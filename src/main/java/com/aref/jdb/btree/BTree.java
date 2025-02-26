@@ -9,7 +9,7 @@ import static com.aref.jdb.btree.BNode.*;
 
 public abstract class BTree {
 
-    private long root; // Pointer (a nonzero page number)
+    private long root;
 
 
     public static int HEADER = 4;
@@ -18,37 +18,32 @@ public abstract class BTree {
     public static int BTREE_MAX_VAL_SIZE = 3000;
 
     public abstract BNode get(long idx);
+
     public abstract Long newNode(BNode node);
+
     public abstract void del(long idx);
 
 
     public boolean delete(byte[] key) {
-        // Assertions
         if (key.length == 0 || key.length > BTREE_MAX_KEY_SIZE) {
             throw new IllegalArgumentException("Invalid key length");
         }
 
-        // If the root is empty, there's nothing to delete
         if (root == 0) {
             return false;
         }
 
-        // Perform the delete operation
         BNode updated = treeDelete(this, get(root), key);
 
-        // If the node is empty, the key was not found
-        if (updated.getData().length == 0) {
-            return false; // Not found
+        if (updated.getData() == null || updated.getData().length == 0) {
+            return false;
         }
 
-        // Delete the old root
         del(root);
 
-        // If the updated node is a BNODE_NODE and has only one key, we remove a level
         if (updated.bType() == BNODE_NODE && updated.nKeys() == 1) {
             root = updated.getPtr(0);
         } else {
-            // Otherwise, create a new root with the updated node
             root = newNode(updated);
         }
 
@@ -56,7 +51,6 @@ public abstract class BTree {
     }
 
     public void insert(byte[] key, byte[] val) {
-        // Assertions
         if (key.length == 0 || key.length > BTREE_MAX_KEY_SIZE) {
             throw new IllegalArgumentException("Invalid key length");
         }
@@ -64,30 +58,24 @@ public abstract class BTree {
             throw new IllegalArgumentException("Invalid value length");
         }
 
-        // If the root is empty, create the first node
         if (root == 0) {
             BNode root = new BNode(new byte[BTREE_PAGE_SIZE]);
             root.setHeader(BNODE_LEAF, 2);
-            // Insert a dummy key to cover the whole key space
             nodeAppendKV(root, 0, 0, null, null);
             nodeAppendKV(root, 1, 0, key, val);
             this.root = newNode(root);
             return;
         }
 
-        // Get the root node and delete the old root
         BNode node = get(root);
         del(root);
 
-        // Insert the new key into the tree
         node = treeInsert(this, node, key, val);
 
-        // Split the node if necessary
         SplitResult splitResult = nodeSplit3(node);
         int nSplit = splitResult.count;
         BNode[] split = splitResult.nodes;
         if (nSplit > 1) {
-            // If the root was split, add a new level
             BNode root = new BNode(new byte[BTREE_PAGE_SIZE]);
             root.setHeader(BNODE_NODE, nSplit);
             for (int i = 0; i < nSplit; i++) {
@@ -98,33 +86,27 @@ public abstract class BTree {
             }
             this.root = newNode(root);
         } else {
-            // Otherwise, set the root to the first node
             this.root = newNode(split[0]);
         }
     }
 
     public void nodeAppendKV(BNode newNode, int idx, long ptr, byte[] key, byte[] val) {
-        // Set pointer
         newNode.setPtr(idx, ptr);
 
-        // Key-Value position
         int pos = newNode.kvPos(idx);
 
-        // Store key and value lengths
-        if(key != null)
+        if (key != null)
             ByteBuffer.wrap(newNode.data, pos, 2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) key.length);
 
-        if(val != null)
+        if (val != null)
             ByteBuffer.wrap(newNode.data, pos + 2, 2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) val.length);
 
-        // Copy key and value data
-        if(key != null)
+        if (key != null)
             System.arraycopy(key, 0, newNode.data, pos + 4, key.length);
-        if(val != null && key != null)
+        if (val != null && key != null)
             System.arraycopy(val, 0, newNode.data, pos + 4 + key.length, val.length);
 
-        // Set the offset of the next key
-        if(key != null && val != null)
+        if (key != null && val != null)
             newNode.setOffset(idx + 1, newNode.getOffset(idx) + 4 + key.length + val.length);
     }
 
@@ -166,7 +148,7 @@ public abstract class BTree {
             return new SplitResult(1, new BNode[]{oldNode});
         }
 
-        BNode left = new BNode(new byte[2 * PAGE_SIZE]); // Might be split later
+        BNode left = new BNode(new byte[2 * PAGE_SIZE]);
         BNode right = new BNode(new byte[PAGE_SIZE]);
         nodeSplit2(left, right, oldNode);
 
@@ -175,7 +157,6 @@ public abstract class BTree {
             return new SplitResult(2, new BNode[]{left, right});
         }
 
-        // Left node is still too large
         BNode leftLeft = new BNode(new byte[PAGE_SIZE]);
         BNode middle = new BNode(new byte[PAGE_SIZE]);
         nodeSplit2(leftLeft, middle, left);
@@ -184,12 +165,18 @@ public abstract class BTree {
         return new SplitResult(3, new BNode[]{leftLeft, middle, right});
     }
 
-    private static void nodeSplit2(BNode left, BNode right, BNode oldNode) {
+    private void nodeSplit2(BNode left, BNode right, BNode old) {
+        int splitIndex = old.nKeys() / 2;
 
+        left.setHeader(BNode.BNODE_LEAF, splitIndex);
+        right.setHeader(BNode.BNODE_LEAF, old.nKeys() - splitIndex);
+
+        nodeAppendRange(left, old, 0, 0, splitIndex);
+        nodeAppendRange(right, old, splitIndex, 0, old.nKeys() - splitIndex);
     }
 
 
-    public static void nodeAppendRange(BNode newNode, BNode oldNode, int dstNew, int srcOld, int n) {
+    public void nodeAppendRange(BNode newNode, BNode oldNode, int dstNew, int srcOld, int n) {
         assert (srcOld + n <= oldNode.nKeys());
         assert (dstNew + n <= newNode.nKeys());
 
@@ -197,20 +184,17 @@ public abstract class BTree {
             return;
         }
 
-        // Copy pointers
         for (int i = 0; i < n; i++) {
             newNode.setPtr(dstNew + i, oldNode.getPtr(srcOld + i));
         }
 
-        // Copy offsets
         int dstBegin = newNode.getOffset(dstNew);
         int srcBegin = oldNode.getOffset(srcOld);
-        for (int i = 1; i <= n; i++) { // NOTE: the range is [1, n]
+        for (int i = 1; i <= n; i++) {
             int offset = dstBegin + oldNode.getOffset(srcOld + i) - srcBegin;
             newNode.setOffset(dstNew + i, offset);
         }
 
-        // Copy Key-Value pairs
         int begin = oldNode.kvPos(srcOld);
         int end = oldNode.kvPos(srcOld + n);
         System.arraycopy(oldNode.data, begin, newNode.data, newNode.kvPos(dstNew), end - begin);
@@ -220,8 +204,6 @@ public abstract class BTree {
         int nKeys = node.nKeys();
         int found = 0;
 
-        // the first key is a copy from the parent node,
-        // thus it's always less than or equal to the key.
         for (int i = 1; i < nKeys; i++) {
             int cmp = Arrays.compare(node.getKey(i), key);
             if (cmp <= 0) {
@@ -235,27 +217,20 @@ public abstract class BTree {
     }
 
     public BNode treeInsert(BTree tree, BNode node, byte[] key, byte[] val) {
-        // Create a new node, potentially larger than one page
         BNode newNode = new BNode(new byte[2 * BTREE_PAGE_SIZE]);
 
-        // Find where to insert the key
         int idx = nodeLookupLE(node, key);
 
-        // Act based on node type
         switch (node.bType()) {
             case BNODE_LEAF:
-                // Leaf node, check if key exists
                 if (Arrays.equals(key, node.getKey(idx))) {
-                    // Key found, update value
                     leafUpdate(newNode, node, idx, key, val);
                 } else {
-                    // Insert new key after position
                     leafInsert(newNode, node, idx + 1, key, val);
                 }
                 break;
 
             case BNODE_NODE:
-                // Internal node, insert into a child node
                 nodeInsert(tree, newNode, node, idx, key, val);
                 break;
 
@@ -267,20 +242,16 @@ public abstract class BTree {
     }
 
     private void nodeInsert(BTree tree, BNode newNode, BNode node, int idx, byte[] key, byte[] val) {
-        // Get and deallocate the child node
         long kPtr = node.getPtr(idx);
         BNode knode = tree.get(kPtr);
         tree.del(kPtr);
 
-        // Recursively insert into the child node
         knode = treeInsert(tree, knode, key, val);
 
-        // Split the result
         SplitResult splitResult = nodeSplit3(knode);
         BNode[] splitNodes = splitResult.nodes;
         int nSplit = splitNodes.length;
 
-        // Update the child links
         nodeReplaceKidN(tree, newNode, node, idx, Arrays.asList(splitNodes).subList(0, nSplit).toArray(new BNode[]{}));
     }
 
@@ -292,18 +263,14 @@ public abstract class BTree {
     }
 
     private BNode treeDelete(BTree tree, BNode node, byte[] key) {
-        // Find the index where the key should be located
         int idx = nodeLookupLE(node, key);
 
-        // Act depending on the node type
         switch (node.bType()) {
             case BNODE_LEAF:
-                // If the key is not found in the leaf node, return an empty node
                 if (!Arrays.equals(key, node.getKey(idx))) {
-                    return new BNode(); // not found
+                    return new BNode();
                 }
 
-                // Delete the key in the leaf node
                 BNode newNode = new BNode();
                 newNode.setData(new byte[BTree.BTREE_PAGE_SIZE]);
                 leafDelete(newNode, node, idx);
@@ -318,53 +285,64 @@ public abstract class BTree {
     }
 
     private BNode nodeDelete(BTree tree, BNode node, int idx, byte[] key) {
-        // Recurse into the child node
         long kptr = node.getPtr(idx);
         BNode updated = treeDelete(tree, tree.get(kptr), key);
 
         if (updated.getData().length == 0) {
-            return new BNode(); // not found
+            return new BNode();
         }
 
-        // Deallocate the old node
         tree.del(kptr);
 
         BNode newNode = new BNode();
         newNode.setData(new byte[BTree.BTREE_PAGE_SIZE]);
 
-        // Check for merging
         ShouldMergeResult shouldMergeResult = shouldMerge(tree, node, idx, updated);
         int mergeDir = shouldMergeResult.shouldMerge;
         BNode sibling;
         switch (mergeDir) {
-            case -1: // left
+            case -1:
                 sibling = tree.get(node.getPtr(idx - 1));
                 BNode mergedLeft = new BNode();
                 mergedLeft.setData(new byte[BTree.BTREE_PAGE_SIZE]);
                 nodeMerge(mergedLeft, sibling, updated);
                 tree.del(node.getPtr(idx - 1));
-                //TODO
-                //nodeReplace2Kid(newNode, node, idx - 1, tree.new(mergedLeft), mergedLeft.getKey(0));
+
+                nodeReplace2Kid(newNode, node, idx - 1, tree.newNode(mergedLeft), mergedLeft.getKey(0));
                 break;
 
-            case 1: // right
+            case 1:
                 sibling = tree.get(node.getPtr(idx + 1));
                 BNode mergedRight = new BNode();
                 mergedRight.setData(new byte[BTree.BTREE_PAGE_SIZE]);
                 nodeMerge(mergedRight, updated, sibling);
                 tree.del(node.getPtr(idx + 1));
-                //TODO
-                //nodeReplace2Kid(newNode, node, idx, tree.new(mergedRight), mergedRight.getKey(0));
+
+                nodeReplace2Kid(newNode, node, idx, tree.newNode(mergedRight), mergedRight.getKey(0));
                 break;
 
             case 0:
-                // No merge needed, just replace the kid
                 assert updated.nKeys() > 0;
                 nodeReplaceKidN(tree, newNode, node, idx, updated);
                 break;
         }
 
         return newNode;
+    }
+
+    private void nodeReplace2Kid(BNode newNode, BNode oldNode, int idx, Long mergedPtr, byte[] mergedKey) {
+        int numKeys = oldNode.nKeys();
+
+        assert idx >= 0 && idx < numKeys - 1;
+
+        newNode.setHeader(BNode.BNODE_NODE, numKeys - 1);
+
+        nodeAppendRange(newNode, oldNode, 0, 0, idx);
+
+        nodeAppendKV(newNode, idx, mergedPtr, mergedKey, null);
+
+        nodeAppendRange(newNode, oldNode, idx + 2, idx + 1, numKeys - (idx + 2));
+
     }
 
     private void nodeMerge(BNode newNode, BNode left, BNode right) {
@@ -374,30 +352,26 @@ public abstract class BTree {
     }
 
     private ShouldMergeResult shouldMerge(BTree tree, BNode node, int idx, BNode updated) {
-        // Check if the updated node is large enough
         if (updated.nBytes() > BTREE_PAGE_SIZE / 4) {
             return new ShouldMergeResult(0, new BNode());
         }
 
-        // Check if the left sibling can be merged
         if (idx > 0) {
             BNode sibling = tree.get(node.getPtr(idx - 1));
             int merged = sibling.nBytes() + updated.nBytes() - HEADER;
             if (merged <= BTREE_PAGE_SIZE) {
-                return new ShouldMergeResult(-1, sibling); // Merge with the left sibling
+                return new ShouldMergeResult(-1, sibling);
             }
         }
 
-        // Check if the right sibling can be merged
         if (idx + 1 < node.nKeys()) {
             BNode sibling = tree.get(node.getPtr(idx + 1));
             int merged = sibling.nBytes() + updated.nBytes() - HEADER;
             if (merged <= BTREE_PAGE_SIZE) {
-                return new ShouldMergeResult(1, sibling); // Merge with the right sibling
+                return new ShouldMergeResult(1, sibling);
             }
         }
 
-        // No merge needed
         return new ShouldMergeResult(0, new BNode());
     }
 

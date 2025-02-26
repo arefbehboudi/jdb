@@ -19,15 +19,12 @@ public class SimpleBTree extends BTree {
             throw new IllegalArgumentException("Node size exceeds page size.");
         }
 
-        // Generate a unique key for the node (e.g., using a hash of the node's data)
-        long key = System.identityHashCode(node); // Using hashcode as a unique identifier
+        long key = System.identityHashCode(node);
 
-        // Check if the page is already occupied
         if (pages.containsKey(key)) {
             throw new IllegalStateException("Page already occupied");
         }
 
-        // Store the node in the map
         pages.put(key, node);
 
         return key;
@@ -45,7 +42,6 @@ public class SimpleBTree extends BTree {
         ref.put(key, val);
     }
 
-    // Delete method for removing key-value pair
     public boolean del(String key) {
         ref.remove(key);
         return delete(key.getBytes());
